@@ -1,21 +1,21 @@
-//// A monadic type abstraction for access to validated monotonic timestamps.
+//// A monad that provides query access to validated monotonic timestamps.
+//// Monotonicity means that time may not decrease between queries, so the timer
+//// may not "run backward". This is enforced by returning only error values
+//// after any decreasing timestamp is detected.
 
 import gleam/order
 import gleam/time/timestamp.{type Timestamp}
 
-//------------------------------------------------------------------------------
-// User-facing
-//------------------------------------------------------------------------------
-
-/// A monad providing access to timestamps that are validated for monotonicity
-/// at every retrieval.
+/// A computation provided query access to timestamps that are validated for
+/// monotonicity.
 pub opaque type MonoTime(a) {
   MonoTime(out: fn(fn() -> Timestamp, State) -> #(a, State))
 }
 
-/// The type of monotonic time exceptions.
+/// A monotonicity exception, which includes a count of how many erroneous
+/// queries have been made so far.
 pub type MonoTimeException {
-  ObservedNonmonotonicTime(count: Int)
+  ObservedDecreasingTimestamp(count: Int)
 }
 
 /// Inject a value into the monadic context.
@@ -24,69 +24,65 @@ pub fn pure(value: a) -> MonoTime(a) {
   #(value, state)
 }
 
-/// Map a monadic value along the designated callback.
+/// Map a value within the monadic context.
 pub fn map(thunk: MonoTime(a), callback: fn(a) -> b) -> MonoTime(b) {
-  use current_time, state <- MonoTime
-  let #(value, state) = thunk.out(current_time, state)
+  use timer, state <- MonoTime
+  let #(value, state) = thunk.out(timer, state)
   #(callback(value), state)
 }
 
-/// Force a monadic value, then continue with the designated callback.
+/// Run the monadic computation, then continue with the callback.
 pub fn bind(thunk: MonoTime(a), callback: fn(a) -> MonoTime(b)) -> MonoTime(b) {
-  use current_time, state <- MonoTime
-  let #(value, state) = thunk.out(current_time, state)
-  callback(value).out(current_time, state)
+  use timer, state <- MonoTime
+  let #(value, state) = thunk.out(timer, state)
+  callback(value).out(timer, state)
 }
 
-/// Access the current timestamp in the monadic context, or return an error.
+/// Query the current timestamp as a monadic computation. If the internal timer
+/// produces a decreasing timestamp, then an error value is returned and the
+/// timer is deactivated, so that any further queries will also return an error
+/// value. When a monadic computation is run, the first query is guaranteed to
+/// succeed.
 pub fn get() -> MonoTime(Result(Timestamp, MonoTimeException)) {
-  use current_time, state <- MonoTime
-  step(state, current_time())
+  use timer, state <- MonoTime
+  step(state, timer())
 }
 
-/// Force a monadic value using a specified function to retrieve timestamps.
-pub fn run(thunk: MonoTime(a), current_time: fn() -> Timestamp) -> a {
-  let #(value, _) = thunk.out(current_time, Init)
+/// Run the monadic computation. The caller must provide a timer, which is
+/// called on each query to retrieve the desired timestamp.
+pub fn run(thunk: MonoTime(a), timer: fn() -> Timestamp) -> a {
+  let #(value, _) = thunk.out(timer, Init)
   value
 }
 
-//------------------------------------------------------------------------------
-// Internals
-//------------------------------------------------------------------------------
-
-/// The internal state tracking timestamps.
 type State {
   Init
   Track(prev: Timestamp)
   Except(count: Int)
 }
 
-/// The result type of stepping a state by one timestamp.
 type Step =
   #(Result(Timestamp, MonoTimeException), State)
 
-/// The result of a successful step.
-fn step_ok(time: Timestamp) -> Step {
+fn step_as_ok(time: Timestamp) -> Step {
   #(Ok(time), Track(time))
 }
 
-/// The result of an erroneous step.
-fn step_error(count: Int) -> Step {
-  #(Error(ObservedNonmonotonicTime(count)), Except(count))
+fn step_as_error(count: Int) -> Step {
+  #(Error(ObservedDecreasingTimestamp(count)), Except(count))
 }
 
-/// Step a state by one observed timestamp.
 fn step(state: State, time: Timestamp) -> Step {
   case state {
-    Init -> step_ok(time)
+    Init -> step_as_ok(time)
 
     Track(prev) -> {
       case timestamp.compare(prev, time) {
-        order.Gt -> step_error(1)
-        _ -> step_ok(time)
+        order.Gt -> step_as_error(1)
+        _ -> step_as_ok(time)
       }
     }
 
-    Except(count) -> step_error(count + 1)
+    Except(count) -> step_as_error(count + 1)
   }
 }
