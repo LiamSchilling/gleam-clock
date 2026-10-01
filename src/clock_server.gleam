@@ -1,7 +1,18 @@
-//// A clock process that emits a "tick" at regular time intervals. The tick
-//// message includes timestamp information for precise real-time simulations.
-//// Settings such as the frame rate and internal time scale may be customized.
-//// The clock may be paused and resumed by way of external messaging.
+//// A clock process that emits a "tick" at regular time intervals.
+//// 
+//// The tick message includes timestamp information for precise real-time
+//// simulations. The internal timer is validated for monotonicity, which may
+//// fail, at which point an error value is emitted and the clock process is
+//// terminated.
+//// 
+//// Settings such as frame rate and internal time scale may be adjusted. The
+//// clock may be paused and resumed via external messages.
+//// 
+//// Internally, each tick is scheduled in advance according to the desired
+//// frame rate, and the scheduling of a tick is never undone or modified. The
+//// effect of this is that changes to the configuration of a running clock do
+//// not take effect until the scheduling of the next tick, which is usually
+//// once the currently-scheduled tick fires.
 
 import gleam/erlang/process.{type Subject}
 import gleam/float
@@ -12,20 +23,21 @@ import mono_time.{type MonoTime, type MonoTimeException}
 
 const millis_per_second = 1000.0
 
-/// The data that specifies the behavior of the clock, and should be determined
-/// at initialization.
+/// A configuration of the timing settings of the clock, including frame rate
+/// and internal time scaling.
 pub opaque type Config {
   Config(ticks_per_unit: Float, units_per_second: Float)
 }
 
-/// The type of configuration creation exceptions.
+/// A configuration creation exception.
 pub type ConfigException {
   TicksPerUnitNonPositive
   UnitsPerSecondNonPositive
   BothNonPositive
 }
 
-/// Construct and return a validated configuration, or return an error.
+/// Construct and return a validated configuration. An error value is returned
+/// if either argument is non-positive.
 pub fn new_config(
   ticks_per_unit: Float,
   units_per_second: Float,
@@ -38,8 +50,8 @@ pub fn new_config(
   }
 }
 
-/// The type of potential clock clients, which must provide callbacks to handle
-/// various events.
+/// A potential client of the clock, which must provide a handler for tick
+/// messages and a handler for error messages.
 pub opaque type Client {
   Client(on_tick: fn(Tick) -> Nil, on_error: fn(MonoTimeException) -> Nil)
 }
@@ -52,28 +64,32 @@ pub fn new_client(
   Client(on_tick:, on_error:)
 }
 
-/// The message emitted by the clock per tick.
+/// A tick message, which provides timestamp information.
 pub opaque type Tick {
   Tick(delta_time: Float)
 }
 
-/// Retrieve the units of time elapsed since the previous tick.
+/// From a tick message, retrieve the units of time elapsed since the previous
+/// tick.
 pub fn delta_time(tick: Tick) -> Float {
   tick.delta_time
 }
 
-/// The running state of the clock.
+/// A running state of the clock.
 pub type State {
+  /// The clock is running normally.
   Resume
+  /// The clock is paused. No ticks are emitted and elapsed time is disregarded.
   Pause
 }
 
-/// The abstract type of clock identifiers.
+/// A clock identifier.
 pub opaque type Clock {
   Clock(subject: Subject(Message))
 }
 
-/// Initialize and return a new clock in the paused state.
+/// Initialize and return a new clock in the paused state. The caller must
+/// provide the internal timer.
 pub fn new(
   config: Config,
   client: Client,
@@ -84,15 +100,15 @@ pub fn new(
   process.spawn(fn() {
     mono_time.run(
       {
-        use maybe_clock <- mono_time.bind(new_internal(config, client))
+        use maybe_clock <- mono_time.bind(new_clock(config, client))
         case maybe_clock {
           Ok(clock) -> {
             process.send(reply, clock.subject)
-            loop_internal(clock)
+            loop_clock(clock)
           }
 
           Error(_) -> {
-            panic as "Impossible: First access to a monotonic timer failed"
+            panic as "Impossible: First query to a monotonic timer failed"
           }
         }
       },
@@ -104,21 +120,27 @@ pub fn new(
 }
 
 /// Set the configuration of the clock. The updated configuration takes effect
-/// after the next tick is emitted.
+/// on the scheduling of the next tick, and does not effect the timing of a
+/// currently-scheduled tick.
 pub fn set_config(clock: Clock, config: Config) -> Nil {
   process.send(clock.subject, SetConfig(config))
 }
 
-/// Set the running state of the clock. A resume schedules the next tick
-/// immediately, if there is not one already scheduled. A pause takes effect
-/// immediately, so that the previously scheduled tick is ignored, and no
-/// message will be emitted. A pause does NOT undo the scheduling of that
-/// previously scheduled tick.
+/// Set the running state of the clock.
+/// 
+/// A resume schedules the next tick immediately, if there is not one already
+/// scheduled.
+/// 
+/// A pause takes effect immediately, so that any currently-scheduled tick is
+/// ignored once it fires, and no message will be emitted by the clock. A pause
+/// does not get rid of the currently-scheduled tick, which would still fire
+/// properly if the clock were then immediately resumed.
 pub fn set_state(clock: Clock, state: State) -> Nil {
   process.send(clock.subject, SetState(state))
 }
 
-/// Terminate the clock and free its resources.
+/// Terminate the clock and free its resources. It is technically safe to send
+/// messages to a terminated clock, but they will be ignored.
 pub fn shutdown(clock: Clock) -> Nil {
   process.send(clock.subject, Shutdown)
 }
@@ -154,7 +176,7 @@ type InternalClock {
   )
 }
 
-fn new_internal(
+fn new_clock(
   config: Config,
   client: Client,
 ) -> MonoTime(Result(InternalClock, MonoTimeException)) {
@@ -199,10 +221,10 @@ fn queue_tick(
   }
 }
 
-fn loop_internal(clock: InternalClock) -> MonoTime(Nil) {
+fn loop_clock(clock: InternalClock) -> MonoTime(Nil) {
   case process.receive_forever(clock.subject) {
     SetConfig(config) -> {
-      loop_internal(InternalClock(..clock, config:))
+      loop_clock(InternalClock(..clock, config:))
     }
 
     SetState(state) -> {
@@ -212,7 +234,7 @@ fn loop_internal(clock: InternalClock) -> MonoTime(Nil) {
           _, _ -> continue_with(clock.time, _)
         }
 
-      loop_internal(
+      loop_clock(
         InternalClock(..clock, time:, state: revise_state(clock.state, state)),
       )
     }
@@ -222,11 +244,11 @@ fn loop_internal(clock: InternalClock) -> MonoTime(Nil) {
         ResumeTicking -> {
           use time <- queue_tick(clock)
           emit_tick(clock, time)
-          loop_internal(InternalClock(..clock, time:))
+          loop_clock(InternalClock(..clock, time:))
         }
 
         PauseTicking -> {
-          loop_internal(InternalClock(..clock, state: PauseSilent))
+          loop_clock(InternalClock(..clock, state: PauseSilent))
         }
 
         PauseSilent -> {

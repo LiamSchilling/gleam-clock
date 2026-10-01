@@ -1,4 +1,5 @@
 //// A monad that provides query access to validated monotonic timestamps.
+//// 
 //// Monotonicity means that time may not decrease between queries, so the timer
 //// may not "run backward". This is enforced by returning only error values
 //// after any decreasing timestamp is detected.
@@ -41,7 +42,9 @@ pub fn bind(thunk: MonoTime(a), callback: fn(a) -> MonoTime(b)) -> MonoTime(b) {
 /// Query the current timestamp as a monadic computation. If the internal timer
 /// produces a decreasing timestamp, then an error value is returned and the
 /// timer is deactivated, so that any further queries will also return an error
-/// value. When a monadic computation is run, the first query is guaranteed to
+/// value.
+/// 
+/// When a monadic computation is run, the first query is guaranteed to
 /// succeed.
 pub fn get() -> MonoTime(Result(Timestamp, MonoTimeException)) {
   use timer, state <- MonoTime
