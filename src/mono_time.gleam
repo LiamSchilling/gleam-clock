@@ -14,7 +14,7 @@ pub opaque type MonoTime(a) {
 }
 
 /// A monotonicity exception, which includes a count of how many erroneous
-/// queries have been made so far.
+/// queries have been made so far (zero-indexed).
 pub type MonoTimeException {
   ObservedDecreasingTimestamp(count: Int)
 }
@@ -81,7 +81,7 @@ fn step(state: State, time: Timestamp) -> Step {
 
     Track(prev) -> {
       case timestamp.compare(prev, time) {
-        order.Gt -> step_as_error(1)
+        order.Gt -> step_as_error(0)
         _ -> step_as_ok(time)
       }
     }

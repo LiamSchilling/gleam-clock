@@ -1,8 +1,8 @@
-//// A clock process that emits a "tick" at regular time intervals.
+//// A clock server that emits a "tick" at regular time intervals.
 //// 
 //// The tick message includes timestamp information for precise real-time
 //// simulations. The internal timer is validated for monotonicity, which may
-//// fail, at which point an error value is emitted and the clock process is
+//// fail, at which point an error value is emitted and the clock server is
 //// terminated.
 //// 
 //// Settings such as frame rate and internal time scale may be adjusted. The
