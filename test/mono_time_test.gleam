@@ -16,8 +16,9 @@ const where_fail = 50
 pub fn run_tests() -> Result(Nil, String) {
   let stream = validated_stream(0)
   let series = series.new(raw_stream(0))
-  use <- mono_time.run(check_prefix_eq(0, check_count, stream))
-  series.next(series)
+  mono_time.run(check_prefix_eq(0, check_count, stream), fn() {
+    series.next(series)
+  })
 }
 
 /// If `where_fail` is `2 * (n+1)`, then the stream
@@ -65,6 +66,6 @@ fn check_prefix_eq(
 }
 
 /// Error value for `check_prefix_eq`.
-fn fail_prefix_eq(i: Int) -> Result(Nil, String) {
+fn fail_prefix_eq(i: Int) -> Result(a, String) {
   Error("Fail: Incorrect timestamp at query " <> int.to_string(i))
 }

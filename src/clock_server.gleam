@@ -36,6 +36,15 @@ pub type ConfigException {
   BothNonPositive
 }
 
+/// Retrieve a string representation of a configuration exception value.
+pub fn config_exception_to_string(err: ConfigException) -> String {
+  case err {
+    TicksPerUnitNonPositive -> "TicksPerUnitNonPositive"
+    UnitsPerSecondNonPositive -> "UnitsPerSecondNonPositive"
+    BothNonPositive -> "BothNonPositive"
+  }
+}
+
 /// Construct and return a validated configuration. An error value is returned
 /// if either argument is non-positive.
 pub fn new_config(
@@ -90,11 +99,7 @@ pub opaque type Clock {
 
 /// Initialize and return a new clock in the paused state. The caller must
 /// provide the internal timer.
-pub fn new(
-  config: Config,
-  client: Client,
-  current_time: fn() -> Timestamp,
-) -> Clock {
+pub fn new(config: Config, client: Client, timer: fn() -> Timestamp) -> Clock {
   let reply = process.new_subject()
 
   process.spawn(fn() {
@@ -107,12 +112,11 @@ pub fn new(
             loop_clock(clock)
           }
 
-          Error(_) -> {
+          Error(_) ->
             panic as "Impossible: First query to a monotonic timer failed"
-          }
         }
       },
-      current_time,
+      timer,
     )
   })
 
@@ -215,9 +219,7 @@ fn queue_tick(
       continuation(time)
     }
 
-    Error(err) -> {
-      mono_time.pure(emit_error(clock, err))
-    }
+    Error(err) -> mono_time.pure(emit_error(clock, err))
   }
 }
 

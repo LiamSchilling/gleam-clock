@@ -43,6 +43,6 @@ fn check_prefix_eq(
 }
 
 /// Error value for `check_prefix_eq`.
-fn fail_prefix_eq(i: Int) -> Result(Nil, String) {
+fn fail_prefix_eq(i: Int) -> Result(a, String) {
   Error("Fail: Stream and series disagree at element " <> int.to_string(i))
 }
